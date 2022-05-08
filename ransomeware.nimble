@@ -3,7 +3,7 @@
 version       = "0.1.0"
 author        = "C-NERD"
 description   = "Ransomeware for client"
-license       = "Proprietary"
+license       = "MIT"
 srcDir        = "src"
 binDir        = "bin"
 bin           = @["ransomeware"]
