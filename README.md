@@ -29,7 +29,7 @@ nimble make
 
 Run
 
-```
+```bash
 
 ./ransomeware --help
 
