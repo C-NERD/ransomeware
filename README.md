@@ -6,9 +6,11 @@ The ransomeware uses the rjindael encryption to encrypt import files
 
 ## Disclaimer
 
-This code is for educational purpose only. I am not responsible for whatever you do with the code. Be responsible and do not use this to harm anybody
+This code is for educational purpose only. I am not responsible for whatever you do with the code. Be responsible and do not use this to harm anybody.
 
-### Compilation
+Although the ransomeware is relatively safe(as long as you do not forget the key and iv used to encrypt your files or you do not encrypt twice is a row), you should not run this on your personal computer.
+
+## Compilation
 
 #### Dependencies :
 
@@ -22,3 +24,15 @@ For you local machine compile with
 nimble make
 
 ```
+
+## Excecution
+
+Run
+
+```
+
+./ransomeware --help
+
+```
+
+To see the list of commands
