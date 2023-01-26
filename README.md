@@ -1,8 +1,7 @@
 ## Ransomeware
 
 Bare bones of ransomeware i create for a client a while back. Yes i ended up not selling the code(I have a conscience).
-
-The ransomeware uses the rjindael encryption to encrypt import files
+This ransomeware uses the rjindael encryption to encrypt import files
 
 ## Disclaimer
 
